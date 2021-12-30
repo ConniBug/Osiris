@@ -173,9 +173,15 @@ static void swapWindow(SDL_Window * window) noexcept
 }
 
 #include <utility>      // std::pair, std::make_pair
-#include <winsock2.h>
 #include <sys/types.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
 #include <memory.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <iostream>
@@ -206,7 +212,7 @@ int resolvehelper(const char* hostname, int family, const char* service, sockadd
 }
 void sendString(std::string str) {
     int result = 0;
-    SOCKET sock = socket(AF_INET, SOCK_DGRAM, 0);
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
 
     char szIP[100];
 
