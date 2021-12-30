@@ -172,7 +172,198 @@ static void swapWindow(SDL_Window * window) noexcept
 #endif
 }
 
-static bool __STDCALL createMove(LINUX_ARGS(void* thisptr,) float inputSampleTime, UserCmd* cmd) noexcept
+#include <utility>      // std::pair, std::make_pair
+#include <winsock2.h>
+#include <sys/types.h>
+#include <memory.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <iostream>
+
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <stdio.h>
+
+// link with Ws2_32.lib
+#pragma comment (lib, "Ws2_32.lib")
+
+int resolvehelper(const char* hostname, int family, const char* service, sockaddr_storage* pAddr)
+{
+    int result;
+    addrinfo* result_list = NULL;
+    addrinfo hints = {};
+    hints.ai_family = family;
+    hints.ai_socktype = SOCK_DGRAM; // without this flag, getaddrinfo will return 3x the number of addresses (one for each socket type).
+    result = getaddrinfo(hostname, service, &hints, &result_list);
+    if (result == 0)
+    {
+        //ASSERT(result_list->ai_addrlen <= sizeof(sockaddr_in));
+        memcpy(pAddr, result_list->ai_addr, result_list->ai_addrlen);
+        freeaddrinfo(result_list);
+    }
+
+    return result;
+}
+void sendString(std::string str) {
+    int result = 0;
+    SOCKET sock = socket(AF_INET, SOCK_DGRAM, 0);
+
+    char szIP[100];
+
+    sockaddr_in addrListen = {}; // zero-int, sin_port is 0, which picks a random port for bind.
+    addrListen.sin_family = AF_INET;
+    result = bind(sock, (sockaddr*)&addrListen, sizeof(addrListen));
+    if (result == -1)
+    {
+        int lasterror = errno;
+        std::cout << "error: " << lasterror;
+        exit(1);
+    }
+
+
+    sockaddr_storage addrDest = {};
+    result = resolvehelper("127.0.0.1", AF_INET, "10001", &addrDest);
+    if (result != 0)
+    {
+        int lasterror = errno;
+        std::cout << "error: " << lasterror;
+        exit(1);
+    }
+
+    size_t msg_length = strlen(str.c_str());
+
+    result = sendto(sock, str.c_str(), msg_length, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+
+    std::cout << result << " bytes sent" << std::endl;
+}
+
+void findAndReplaceAll(std::string& data, std::string toSearch, std::string replaceStr)
+{
+    // Get the first occurrence
+    size_t pos = data.find(toSearch);
+    // Repeat till end is reached
+    while (pos != std::string::npos)
+    {
+        // Replace this occurrence of Sub String
+        data.replace(pos, toSearch.size(), replaceStr);
+        // Get the next occurrence from the current position
+        pos = data.find(toSearch, pos + replaceStr.size());
+    }
+}
+
+// Adds header to beginning of string such that string = <header | data>
+std::string encodeHeader(std::string header, std::string data) {
+    // Replace illegal chars
+    findAndReplaceAll(data, "<", "%3C");
+    findAndReplaceAll(data, "|", "%3E");
+    findAndReplaceAll(data, ">", "%7C");
+    return "<" + header +  "|" + data  + ">";
+}
+void uint64_to_string(uint64_t value, std::string& result) {
+    result.clear();
+    result.reserve(20); // max. 20 digits possible
+    uint64_t q = value;
+    do {
+        result += "0123456789"[q % 10];
+        q /= 10;
+    } while (q);
+    std::reverse(result.begin(), result.end());
+}
+//-- Turn key & val into string pair such that string = [key:pair]
+std::string encodeList(std::string arr []) {
+    std::string data = "";
+    for (unsigned int i = 0; i < sizeof(arr); ++i)
+    {
+        std::string tmp = arr[i];
+        findAndReplaceAll(tmp, ";", "%3B");
+        data = data + ";" + tmp;
+    }
+
+    if (data.length() > 0)
+        data = data.substr(2);
+
+    return data;
+}
+std::string encodeKey(std::string key, std::string data) {
+    //--Replace illegal chars
+    findAndReplaceAll(data, "{", "%7B");
+    findAndReplaceAll(data, "}", "%7D");
+    findAndReplaceAll(data, ":", "%3A");
+    std::string tmp = "{" + key + ":" + data + "}"; // ugly but for debuggin
+    return tmp;
+}
+std::string encodeKeys(std::pair<std::string, std::string> obj []) {
+    std::string data = "";
+
+    for (int i = 0; i < 100; ++i)
+    {
+        data = data + "," + encodeKey(obj[i].first, obj[i].second);
+        //cout << "value of a: " << obj[a] << endl;
+    }
+    if (data.length() > 0) {
+        data = data.substr(2);
+    }
+    return data;
+}
+//--Returns list of players as string
+std::string collectPlayers() {
+    std::string arr[20];
+    for (int i = 1; i <= interfaces->engine->getMaxClients(); i++) {
+        auto entity = interfaces->entityList->getEntity(i);
+        if (!entity || entity == localPlayer.get() || entity->isDormant() || !entity->isAlive()
+            || !entity->isOtherEnemy(localPlayer.get()) && entity->gunGameImmunity())
+            continue;
+
+        // --General info
+        std::string name = entity->getPlayerName();
+        findAndReplaceAll(name, ";", "%3B");
+        findAndReplaceAll(name, ",", "%2C");
+        Team team = entity->getTeamNumber();
+        //--Steamid
+        std::string steamid = "Bot";
+        uint64_to_string(entity->getSteamId(), steamid);
+        //--[debug]
+        PlayerInfo playerInfo;
+        if (!interfaces->engine->getPlayerInfo(entity->index(), playerInfo))
+            continue;
+
+        if (!playerInfo.fakeplayer) {
+            uint64_to_string(entity->getSteamId(), steamid);
+        }
+        //-- Position& View angle
+        Vector pos = entity->getAbsOrigin();
+        float angle = entity->eyeAngles().y;
+        //--Weapon
+        std::string weaponName = "";
+        int weapon = entity->weapon();
+        weaponName = std::to_string(weapon);
+        //-- Health
+        bool alive = entity->isAlive();
+        int health = entity->health();
+        //-- Ping
+        int ping = 11110;
+        //--Combined string --
+        std::pair<std::string, std::string> data[10] = {
+            std::make_pair("name", name),
+            std::make_pair("team", std::to_string((int)team)),
+            std::make_pair("x", std::to_string(pos.x)),
+            std::make_pair("y", std::to_string(pos.y)),
+            std::make_pair("steamid", steamid),
+            std::make_pair("angle", std::to_string(angle)),
+            std::make_pair("weaponName", weaponName),
+            std::make_pair("alive", std::to_string(alive)),
+            std::make_pair("health", std::to_string(health)),
+            std::make_pair("ping", std::to_string(ping)),
+        };
+        std::string daa = encodeKeys(data);
+        arr[i] = daa;
+    }
+    return encodeHeader("players", encodeList(arr));
+}
+std::string collectRounds() {
+    return encodeHeader("rounds", "10");
+}
+static bool __STDCALL createMove(LINUX_ARGS(void* thisptr, ) float inputSampleTime, UserCmd* cmd) noexcept
 {
     auto result = hooks->clientMode.callOriginal<bool, WIN32_LINUX(24, 25)>(inputSampleTime, cmd);
 
@@ -208,6 +399,26 @@ static bool __STDCALL createMove(LINUX_ARGS(void* thisptr,) float inputSampleTim
     Misc::quickReload(cmd);
     Misc::fixTabletSignal();
     Misc::slowwalk(cmd);
+
+    static int previousTickSent = 0;
+    static int ticksBetweenLoop = 5;
+
+    if (memory->globalVars->tickCount - previousTickSent > ticksBetweenLoop) {
+        previousTickSent = memory->globalVars->tickCount;
+        //sendString("SUPPPPPPPPP");
+        //sendString("SUPPPPPPPPP");
+
+        //std::string map = encodeHeader("map", "de_inferno");
+        //std::string players = collectPlayers();
+        ////local bomb = collectC4();
+        ////local smokes = collectSmokes();
+        //std::string rounds = collectRounds();
+        ////--Add it all together
+        //std::string data = map + players /*+bomb +smokes*/ + rounds;
+        ////--Send data over UDP
+        //sendString(data);
+
+    }
 
     EnginePrediction::run(cmd);
 
