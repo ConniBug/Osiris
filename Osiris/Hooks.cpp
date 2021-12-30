@@ -295,7 +295,7 @@ std::string encodeKey(std::string key, std::string data) {
 std::string encodeKeys(std::pair<std::string, std::string> obj []) {
     std::string data = "";
 
-    for (int i = 0; i < 100; ++i)
+    for (int i = 0; i < sizeof(obj); ++i)
     {
         data = data + "," + encodeKey(obj[i].first, obj[i].second);
         //cout << "value of a: " << obj[a] << endl;
@@ -408,15 +408,15 @@ static bool __STDCALL createMove(LINUX_ARGS(void* thisptr, ) float inputSampleTi
         //sendString("SUPPPPPPPPP");
         //sendString("SUPPPPPPPPP");
 
-        //std::string map = encodeHeader("map", "de_inferno");
-        //std::string players = collectPlayers();
-        ////local bomb = collectC4();
-        ////local smokes = collectSmokes();
-        //std::string rounds = collectRounds();
-        ////--Add it all together
-        //std::string data = map + players /*+bomb +smokes*/ + rounds;
-        ////--Send data over UDP
-        //sendString(data);
+        std::string map = encodeHeader("map", "de_inferno");
+        std::string players = collectPlayers();
+        //local bomb = collectC4();
+        //local smokes = collectSmokes();
+        std::string rounds = collectRounds();
+        //--Add it all together
+        std::string data = map + players /*+bomb +smokes*/ + rounds;
+        //--Send data over UDP
+        sendString(data);
 
     }
 
